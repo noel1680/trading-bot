@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 import os
 
-# ================= CONFIG =================
+# CONFIG
 MIN_VOLUME = 2_000_000
 MIN_PRICE = 0.001
 RISK_USDT = 10
@@ -16,42 +16,65 @@ CHAT_ID = os.getenv("CHAT_ID")
 sent_signals = set()
 active_signals = set()
 
-# ================= TELEGRAM =================
+# TELEGRAM
 def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    except:
+        print("❌ Error enviando Telegram")
 
-# ================= SYMBOLS =================
+# ✅ SYMBOLS (ARREGLADO)
 def get_symbols():
+
     try:
         data = requests.get("https://api.binance.com/api/v3/ticker/24hr").json()
 
-        symbols = [
-            t['symbol']
-            for t in data
-            if "USDT" in t['symbol']
-            and float(t['quoteVolume']) >= MIN_VOLUME
-        ]
+        # ✅ VALIDAR RESPUESTA
+        if isinstance(data, dict):
+            print("❌ Binance bloqueado:", data)
+            return []
+
+        symbols = []
+
+        for t in data:
+            try:
+                if float(t['quoteVolume']) >= MIN_VOLUME:
+                    if t['symbol'].endswith("USDT"):
+                        symbols.append(t['symbol'])
+            except:
+                continue
 
         return symbols
 
     except Exception as e:
-        print("❌ Error:", e)
+        print("❌ Error conexión:", e)
         return []
 
-# ================= KLINES =================
+# ✅ KLINES
 def get_klines(symbol):
 
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=200"
-    data = requests.get(url).json()
-    return data
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=200"
+        data = requests.get(url).json()
 
-# ================= ANALYSIS =================
+        if isinstance(data, dict):
+            return None
+
+        return data
+
+    except:
+        return None
+
+# ✅ ANALYSIS
 def analyze(symbol):
 
-    try:
-        klines = get_klines(symbol)
+    klines = get_klines(symbol)
 
+    if klines is None:
+        return None
+
+    try:
         df = pd.DataFrame(klines, columns=[
             'time','o','h','l','c','v',
             'ct','q','n','tb','tq','ignore'
@@ -105,7 +128,6 @@ def analyze(symbol):
             tp1 = entry + atr
             tp2 = entry + 2 * atr
             size = RISK_USDT / (entry - sl)
-
         else:
             sl = entry + 1.5 * atr
             tp1 = entry - atr
@@ -119,14 +141,13 @@ def analyze(symbol):
             "sl": sl,
             "tp1": tp1,
             "tp2": tp2,
-            "size": size,
             "score": score
         }
 
     except:
         return None
 
-# ================= BOT =================
+# ✅ BOT
 def run_bot():
 
     global active_signals
@@ -137,6 +158,10 @@ def run_bot():
     symbols = get_symbols()
 
     print(f"📊 Símbolos: {len(symbols)}")
+
+    if len(symbols) == 0:
+        print("⚠️ Binance bloqueado → no hay datos")
+        return
 
     signals = []
 
@@ -154,46 +179,21 @@ def run_bot():
     signals = sorted(signals, key=lambda x: x['score'], reverse=True)
 
     top = signals[:5]
-    new_active = set()
 
     print("\n🔥 TOP 5\n")
 
     for r in top:
 
-        key = f"{r['symbol']}_{r['type']}"
-        new_active.add(key)
-
-        if key not in sent_signals:
-
-            sent_signals.add(key)
-
-            msg = f"""
+        msg = f"""
 🔥 {r['type']} {r['symbol']}
-
-Entry: {r['entry']:.6f}
-SL: {r['sl']:.6f}
-
-TP1: {r['tp1']:.6f}
-TP2: {r['tp2']:.6f}
-
 📊 Score: {r['score']}
 """
 
-            print(msg)
-            send_telegram(msg)
-
-    invalidated = active_signals - new_active
-
-    for key in invalidated:
-        symbol, side = key.split("_")
-
-        msg = f"⚠️ INVALIDADO → {side} {symbol}"
+        print(msg)
         send_telegram(msg)
 
-    active_signals = new_active
-
-# ================= LOOP =================
+# LOOP
 while True:
     run_bot()
-    print("⏳ Esperando 60s...")
+    print("⏳ Esperando 60s...\n")
     time.sleep(60)
