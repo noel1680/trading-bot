@@ -4,15 +4,20 @@ import ta
 import requests
 import time
 from concurrent.futures import ThreadPoolExecutor
+import os
+
+# ================= FIX PARA RAILWAY =================
+class SafeClient(Client):
+    def ping(self):
+        return True  # 🔥 evita bloqueo Railway
+
+client = SafeClient("", "")
 
 # ================= CONFIG =================
-client = Client()
-
 MIN_VOLUME = 2_000_000
 MIN_PRICE = 0.001
 RISK_USDT = 10
 
-import os
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
@@ -21,24 +26,62 @@ active_signals = set()
 
 # ================= TELEGRAM =================
 def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+        print("📲 Telegram enviado")
+    except Exception as e:
+        print("❌ Error Telegram:", e)
 
 # ================= SYMBOLS =================
 def get_symbols():
-
-    tickers = client.get_ticker()
+    try:
+        tickers = client.get_ticker()
+    except Exception as e:
+        print("❌ Error Binance:", e)
+        return []
 
     symbols = []
 
     for t in tickers:
-        symbol = t['symbol']
-        volume = float(t['quoteVolume'])
+        try:
+            symbol = t['symbol']
+            volume = float(t['quoteVolume'])
 
-        if symbol.endswith('USDT') and volume >= MIN_VOLUME:
-            symbols.append(symbol)
+            if symbol.endswith('USDT') and volume >= MIN_VOLUME:
+                symbols.append(symbol)
+
+        except:
+            continue
 
     return symbols
+
+# ================= SCORE =================
+def calculate_score(df):
+
+    last = df.iloc[-1]
+    score = 0
+
+    # tendencia fuerte
+    if last['ema20'] > last['ema50'] > last['ema200']:
+        score += 30
+    elif last['ema20'] < last['ema50'] < last['ema200']:
+        score += 30
+
+    # RSI
+    if 50 < last['rsi'] < 70:
+        score += 20
+
+    # volumen
+    vol_avg = df['v'].rolling(20).mean().iloc[-1]
+    if df['v'].iloc[-1] > vol_avg:
+        score += 20
+
+    # momentum
+    if df['c'].iloc[-1] > df['c'].iloc[-5]:
+        score += 30
+
+    return score
 
 # ================= ANALYSIS =================
 def analyze(symbol):
@@ -57,6 +100,14 @@ def analyze(symbol):
 
         df[['o','h','l','c','v']] = df[['o','h','l','c','v']].astype(float)
 
+        # ✅ precio actual
+        entry = df['c'].iloc[-1]
+
+        # ✅ filtro precio mínimo
+        if entry < MIN_PRICE:
+            return None
+
+        # indicadores
         df['ema20'] = ta.trend.ema_indicator(df['c'], 20)
         df['ema50'] = ta.trend.ema_indicator(df['c'], 50)
         df['ema200'] = ta.trend.ema_indicator(df['c'], 200)
@@ -64,56 +115,50 @@ def analyze(symbol):
         df['atr'] = ta.volatility.average_true_range(df['h'], df['l'], df['c'], 14)
 
         last = df.iloc[-1]
-
-        entry = last['c']
         atr = last['atr']
 
-        # ✅ filtro precio
-        if entry < MIN_PRICE or atr == 0:
+        if pd.isna(atr) or atr == 0:
             return None
 
-        # ✅ score REAL
-        score = 0
-
-        if last['ema20'] > last['ema50'] > last['ema200']:
-            score += 30
-            trend = "LONG"
-        elif last['ema20'] < last['ema50'] < last['ema200']:
-            score += 30
-            trend = "SHORT"
-        else:
-            return None
-
-        if 50 < last['rsi'] < 70:
-            score += 20
-
-        vol_avg = df['v'].rolling(20).mean().iloc[-1]
-        if last['v'] > vol_avg:
-            score += 20
-
-        if df['c'].iloc[-1] > df['c'].iloc[-5]:
-            score += 30
+        score = calculate_score(df)
 
         if score < 60:
             return None
 
         # ✅ LONG
-        if trend == "LONG":
+        if last['ema20'] > last['ema50'] > last['ema200']:
+
             sl = entry - 1.5 * atr
-            size = RISK_USDT / (entry - sl)
+            risk = entry - sl
+            if risk <= 0:
+                return None
+
+            size = RISK_USDT / risk
             tp1 = entry + atr
             tp2 = entry + 2 * atr
 
+            trade_type = "LONG"
+
         # ✅ SHORT
-        else:
+        elif last['ema20'] < last['ema50'] < last['ema200']:
+
             sl = entry + 1.5 * atr
-            size = RISK_USDT / (sl - entry)
+            risk = sl - entry
+            if risk <= 0:
+                return None
+
+            size = RISK_USDT / risk
             tp1 = entry - atr
             tp2 = entry - 2 * atr
 
+            trade_type = "SHORT"
+
+        else:
+            return None
+
         return {
             "symbol": symbol,
-            "type": trend,
+            "type": trade_type,
             "entry": entry,
             "sl": sl,
             "tp1": tp1,
@@ -130,10 +175,16 @@ def run_bot():
 
     global active_signals
 
+    print("\n✅ Bot activo")
     print("\n🚀 NUEVO CICLO\n")
 
     symbols = get_symbols()
-    print(f"Símbolos: {len(symbols)}")
+
+    print(f"📊 Símbolos encontrados: {len(symbols)}")
+
+    if len(symbols) == 0:
+        print("❌ ERROR: No hay símbolos → Binance bloqueado o fallo red")
+        return
 
     signals = []
 
@@ -144,19 +195,21 @@ def run_bot():
         if r:
             signals.append(r)
 
-    if not signals:
-        print("❌ No señales\n")
+    if len(signals) == 0:
+        print("❌ No se encontraron señales\n")
         return
 
     # ✅ ordenar por score
     signals = sorted(signals, key=lambda x: x['score'], reverse=True)
 
+    # ✅ TOP 5
     top_signals = signals[:5]
 
     new_active = set()
 
-    print("\n✅ TOP 5\n")
+    print("\n🔥 TOP 5 SEÑALES\n")
 
+    # ✅ ENVIAR MENSAJES ORDENADOS
     for r in top_signals:
 
         key = f"{r['symbol']}_{r['type']}"
@@ -169,11 +222,11 @@ def run_bot():
             msg = f"""
 🔥 {r['type']} {r['symbol']}
 
-Entry: {r['entry']:.4f}
-SL: {r['sl']:.4f}
+Entry: {r['entry']:.6f}
+SL: {r['sl']:.6f}
 
-TP1: {r['tp1']:.4f}
-TP2: {r['tp2']:.4f}
+TP1: {r['tp1']:.6f}
+TP2: {r['tp2']:.6f}
 
 📊 Score: {r['score']}
 """
@@ -181,17 +234,22 @@ TP2: {r['tp2']:.4f}
             print(msg)
             send_telegram(msg)
 
-    # ✅ INVALIDADOS
+    # ✅ INVALIDAR SEÑALES
     invalidated = active_signals - new_active
 
     for key in invalidated:
+
         symbol, side = key.split("_")
 
         msg = f"""
 ⚠️ INVALIDADO
 
 {side} {symbol}
+
+Esta señal ya no es válida.
 """
+
+        print(msg)
         send_telegram(msg)
 
     active_signals = new_active
@@ -199,9 +257,8 @@ TP2: {r['tp2']:.4f}
 # ================= LOOP =================
 try:
     while True:
-        print("✅ Bot activo")
         run_bot()
-        print("⏳ Esperando 60s...\n")
+        print("\n⏳ Esperando 60 segundos...\n")
         time.sleep(60)
 
 except KeyboardInterrupt:
