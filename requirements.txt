@@ -1,4 +1,4 @@
-pybit
+python-binance
 pandas
 ta
 requests
