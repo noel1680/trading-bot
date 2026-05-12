@@ -261,9 +261,14 @@ Esta señal dejó de ser válida.
     active_signals = new_active
 
 # ================= LOOP =================
+
 try:
     while True:
+
+        print("\n✅ Bot activo")
+
         run_bot()
+
         print("⏳ Esperando 60s...\n")
         time.sleep(60)
 
