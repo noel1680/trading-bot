@@ -13,8 +13,8 @@ MIN_VOLUME = 2_000_000
 MIN_PRICE = 0.001
 RISK_USDT = 10
 
-TOKEN = "TU_TOKEN"
-CHAT_ID = "TU_CHAT_ID"
+TOKEN = "8744850460:AAHuLZ7u6LHPw4ZkCEh2hBQvk8TnVm4UTF4"
+CHAT_ID = "7971489632"
 
 sent_signals = set()
 active_signals = set()
