@@ -16,8 +16,10 @@ MIN_PRICE = 0.001   # 🔥 NUEVO FILTRO
 RISK_USDT = 10
 MIN_PROFIT_FACTOR = 1.3
 
-TOKEN = "8744850460:AAHuLZ7u6LHPw4ZkCEh2hBQvk8TnVm4UTF4"
-CHAT_ID = "7971489632"
+import os
+
+TOKEN = os.getenv("TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 sent_signals = set()
 active_signals = set()
