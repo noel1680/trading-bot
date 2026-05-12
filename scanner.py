@@ -266,7 +266,9 @@ Esta señal dejó de ser válida.
 try:
     while True:
 
-        print("\n✅ Bot activo")
+        from datetime import datetime
+
+        print(f"✅ Bot activo - {datetime.now()}")
 
         run_bot()
 
